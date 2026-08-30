@@ -11,6 +11,10 @@ Auth:      x-api-key: <YOUR_API_KEY>
 
 > You need an API key to use this. Request one from the Pentagon Games team.
 
+> ⏱️ **Generation takes ~100–170 s per image.** Set a **client timeout of at least 300 s** — a short
+> default timeout (many HTTP clients default to 30–60 s) will abort the request mid-generation. See
+> [Latency & timeouts](#latency--timeouts).
+
 ---
 
 ## Example
@@ -56,10 +60,12 @@ Provide **either** `image` (file) **or** `image_url`.
 ```bash
 curl -X POST https://imgen.pentagon.games/v1/edit \
   -H "x-api-key: $IMGEN_KEY" \
+  -m 300 \
   -F "image=@my_pet.png" \
   -F "prompt=turn this creature into a heroic knight in golden armor, keep it a creature with its animal head, ears and colors" \
   -o derivative.png
 ```
+> `-m 300` — generation takes ~100–170 s; without a long timeout your client will abort mid-request.
 
 **Python** — see [`examples/remix.py`](examples/remix.py)
 **Node.js** — see [`examples/remix.js`](examples/remix.js)
@@ -82,9 +88,19 @@ The model follows your prompt literally, so a few words change the outcome:
 
 ---
 
+## Latency & timeouts
+
+- **~100–170 s per image.** The model is 20B params running at ~35 steps; this is compute time, not queueing.
+- **Set your client timeout to ≥ 300 s.** The API returns the finished PNG in a single response, so the
+  connection stays open for the whole generation. A default 30–60 s timeout will abort it — set it explicitly:
+  - curl: `-m 300`
+  - Python `requests`: `timeout=300`
+  - JS `fetch`: use an `AbortController` with a 300 s+ deadline (don't rely on the default)
+- **Go faster with fewer steps:** `steps=20` ≈ ~100 s (minor quality cost); `steps=35` (default) is the highest quality.
+- **One at a time.** A single GPU processes requests serially — concurrent calls queue.
+
 ## Notes & limits
 
-- **Latency:** ~30–60 s per image (single GPU, memory-offloaded). Requests are processed one at a time.
 - **You must have rights to the input image.** This API creates derivatives of whatever you send it — send only images you own or are licensed to modify.
 - **Model:** Qwen-Image-Edit, Apache-2.0. Self-hosted; no third-party image API in the path.
 
