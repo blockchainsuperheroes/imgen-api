@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+derivative.png
+.env
