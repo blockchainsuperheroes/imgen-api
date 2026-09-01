@@ -11,9 +11,9 @@ Auth:      x-api-key: <YOUR_API_KEY>
 
 > You need an API key to use this. Request one from the Pentagon Games team.
 
-> ⏱️ **Generation takes ~100–170 s per image.** Set a **client timeout of at least 300 s** — a short
-> default timeout (many HTTP clients default to 30–60 s) will abort the request mid-generation. See
-> [Latency & timeouts](#latency--timeouts).
+> ⏱️ **This is an async API.** You **submit a job** (`POST /v1/edit` → returns a `job_id` instantly) and
+> then **poll for the result** (`GET /v1/result/{job_id}`). Generation takes ~100–170 s; polling every
+> ~10 s means no long-held connection and no client-timeout pitfalls. See [How it works](#how-it-works).
 
 ---
 
@@ -27,16 +27,22 @@ Same creature — face, ears, markings, colors preserved — across three very d
 
 ---
 
+## How it works
+
+```
+1. POST /v1/edit         → { "job_id": "...", "status": "queued", "result_url": "/v1/result/<id>" }
+2. GET  /v1/result/<id>  → 202 { "status": "processing" }   (keep polling, ~10s)
+                         → 200 image/png                     (done — the derivative)
+                         → 500 { "detail": "..." }           (generation failed)
+```
+
 ## Endpoints
 
 ### `GET /health`
-No auth. Liveness check.
-```json
-{ "status": "ok", "model": "Qwen-Image-Edit" }
-```
+No auth. Liveness check → `{ "status": "ok", "model": "Qwen-Image-Edit", "mode": "async" }`
 
-### `POST /v1/edit`
-Auth required (`x-api-key` header). `multipart/form-data`.
+### `POST /v1/edit`  — submit a job
+Auth required (`x-api-key` header). `multipart/form-data`. Returns immediately with a `job_id`.
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
@@ -48,24 +54,33 @@ Auth required (`x-api-key` header). `multipart/form-data`.
 | `cfg` | float | | `4.0` | Guidance strength. |
 | `seed` | int | | `7` | Fix for reproducible output. |
 
-**Returns:** `image/png` bytes (the derivative).
+**Returns:** `{ "job_id", "status": "queued", "result_url" }`. Provide **either** `image` **or** `image_url`.
 
-Provide **either** `image` (file) **or** `image_url`.
+### `GET /v1/result/{job_id}`  — fetch the result
+Auth required. Poll this until it returns the image.
+- **200** `image/png` — the finished derivative
+- **202** `{ "status": "queued" | "processing" }` — not ready, poll again
+- **404** unknown `job_id` · **500** generation failed
 
 ---
 
 ## Quick start
 
-**curl**
+**curl** (submit, then poll)
 ```bash
-curl -X POST https://imgen.pentagon.games/v1/edit \
+# 1) submit
+JOB=$(curl -s -X POST https://imgen.pentagon.games/v1/edit \
   -H "x-api-key: $IMGEN_KEY" \
-  -m 300 \
   -F "image=@my_pet.png" \
   -F "prompt=turn this creature into a heroic knight in golden armor, keep it a creature with its animal head, ears and colors" \
-  -o derivative.png
+  | grep -o '"job_id":"[^"]*"' | cut -d'"' -f4)
+
+# 2) poll until the PNG comes back (202 = still working)
+until curl -sf -o derivative.png \
+  -H "x-api-key: $IMGEN_KEY" \
+  https://imgen.pentagon.games/v1/result/$JOB; do sleep 10; done
+echo "saved derivative.png"
 ```
-> `-m 300` — generation takes ~100–170 s; without a long timeout your client will abort mid-request.
 
 **Python** — see [`examples/remix.py`](examples/remix.py)
 **Node.js** — see [`examples/remix.js`](examples/remix.js)
@@ -88,16 +103,13 @@ The model follows your prompt literally, so a few words change the outcome:
 
 ---
 
-## Latency & timeouts
+## Latency & polling
 
-- **~100–170 s per image.** The model is 20B params running at ~35 steps; this is compute time, not queueing.
-- **Set your client timeout to ≥ 300 s.** The API returns the finished PNG in a single response, so the
-  connection stays open for the whole generation. A default 30–60 s timeout will abort it — set it explicitly:
-  - curl: `-m 300`
-  - Python `requests`: `timeout=300`
-  - JS `fetch`: use an `AbortController` with a 300 s+ deadline (don't rely on the default)
-- **Go faster with fewer steps:** `steps=20` ≈ ~100 s (minor quality cost); `steps=35` (default) is the highest quality.
-- **One at a time.** A single GPU processes requests serially — concurrent calls queue.
+- **~100–170 s per image.** The model is 20B params at ~35 steps; this is compute time.
+- **Poll `/v1/result/{job_id}` every ~10 s.** Each call is instant — because the work is async, there's no
+  long-held connection, so ordinary client defaults are fine (no need for special timeouts).
+- **Go faster with fewer steps:** `steps=20` ≈ ~100 s (minor quality cost); `steps=35` (default) = highest quality.
+- **One at a time.** A single GPU processes jobs serially — extra jobs queue (their `job_id` stays `queued` until picked up).
 
 ## Notes & limits
 
