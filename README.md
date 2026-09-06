@@ -116,6 +116,34 @@ The model follows your prompt literally, so a few words change the outcome:
 - **You must have rights to the input image.** This API creates derivatives of whatever you send it — send only images you own or are licensed to modify.
 - **Model:** Qwen-Image-Edit, Apache-2.0. Self-hosted; no third-party image API in the path.
 
+## Companion: image compare (on-brand + SFW)
+
+A separate self-check endpoint scores a **candidate** image against a **source** — is it the *same character / on-brand*, and is it *SFW*? Use it to gate our own generations before mint, or to check a **user-uploaded** derivative (of an NFT the user holds the rights to).
+
+### `POST /v1/verify`
+Auth required. `multipart/form-data`. Provide `source` (file) or `source_url`, and `candidate` (file) or `candidate_url`.
+
+```bash
+curl -sS -X POST https://<verify-host>/v1/verify \
+  -H "x-api-key: $VERIFY_KEY" \
+  -F "source_url=https://.../nft.png" \
+  -F "candidate_url=https://.../generated.png"
+```
+**Returns:**
+```json
+{
+  "on_brand": { "identity_similarity": 0.91, "style_similarity": 0.88,
+                "same_character": true, "on_style": true, "score": 0.90 },
+  "sfw":      { "safe": true, "nsfw_score": 0.01 },
+  "verdict":  "pass"
+}
+```
+- **`verdict`**: `pass` (same character + on-style + SFW) · `review` (borderline identity → send to a human) · `fail` (not SFW, or clearly a different character).
+- **Models** (self-hosted, small — runs on CPU or a 24 GB GPU): **DINOv2** (identity similarity) + **CLIP** (style/brand) + **Falconsai/nsfw_image_detection** (SFW).
+- **Thresholds** are env-tunable per collection (`IDENTITY_SAME`, `STYLE_OK`, `NSFW_MAX`).
+
+Server: [`server/verify_api.py`](server/verify_api.py) · example: [`examples/verify.sh`](examples/verify.sh).
+
 ## Self-hosting
 
-The server is a small FastAPI app around `diffusers`. See [`server/qwen_api.py`](server/qwen_api.py) and [`server/README.md`](server/README.md) to run your own instance.
+The remix server is a small FastAPI app around `diffusers` — see [`server/qwen_api.py`](server/qwen_api.py) and [`server/README.md`](server/README.md). The compare server is [`server/verify_api.py`](server/verify_api.py) (independent; run it on its own — cheaper — host).
